@@ -36,12 +36,12 @@ export class Store implements IStore {
 
   allowedToRead(key: string): boolean {
     const permission = this.getPermission(key);
-    return permission == "r" || permission == "rw";
+    return permission === "r" || permission === "rw";
   }
 
   allowedToWrite(key: string): boolean {
     const permission = this.getPermission(key);
-    return permission == "w" || permission == "rw";
+    return permission === "w" || permission === "rw";
   }
 
   read(path: string): StoreResult {
