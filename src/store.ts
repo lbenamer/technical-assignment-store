@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import { JSONArray, JSONObject, JSONPrimitive } from "./json-types";
 
 export type Permission = "r" | "w" | "rw" | "none";
@@ -20,42 +21,18 @@ export interface IStore {
   entries(): JSONObject;
 }
 
-type PermissionObject = {
-  [key: string]: {
-    [key: string]: Permission;
-  };
-};
-class PermissionStore {
-  private permissions: PermissionObject = {};
-
-  add(storeName: string, key: string, permission: Permission) {
-    if (!(storeName in this.permissions)) this.permissions[storeName] = {};
-    this.permissions[storeName][key] = permission;
-  }
-
-  read(storeName: string, key: string): Permission | undefined {
-    if (this.permissions[storeName]) return this.permissions[storeName][key];
-    return undefined;
-  }
-}
-
-const permissionStore = new PermissionStore();
+const PERMISSION_KEY = Symbol("permissions");
 
 export function Restrict(permission?: Permission): PropertyDecorator {
   return (target: Object, propertyKey: string | symbol) => {
-    const storeName = target.constructor.name;
-    if (permission)
-      permissionStore.add(storeName, propertyKey as string, permission);
+    const permissions = Reflect.getMetadata(PERMISSION_KEY, target) || {};
+    permissions[propertyKey as string] = permission;
+    Reflect.defineMetadata(PERMISSION_KEY, permissions, target);
   };
 }
 
 export class Store implements IStore {
   defaultPolicy: Permission = "rw";
-
-  getPermission(key: string): Permission {
-    const storeName = this.constructor.name;
-    return permissionStore.read(storeName, key) || this.defaultPolicy;
-  }
 
   allowedToRead(key: string): boolean {
     const permission = this.getPermission(key);
@@ -70,37 +47,61 @@ export class Store implements IStore {
   read(path: string): StoreResult {
     const [key, subPath] = this.computePath(path);
 
-    if (!subPath.length) {
-      if (!this.allowedToRead(key as string)) {
-        throw Error("read operation not allowed");
-      }
-      const value = this[key as keyof this];
-      if (typeof value === "function") {
-        return value();
-      }
-      return value as StoreResult;
-    } else {
-      const value = this[key as keyof this];
-      const subStore: Store = typeof value === "function" ? value() : value;
-      return subStore.read(subPath);
-    }
+    if (!subPath.length) return this.readThisStore(key);
+
+    return this.readNestedStore(subPath, key);
   }
 
   write(path: string, value: StoreValue): StoreValue {
     const [key, subPath] = this.computePath(path);
 
-    if (!subPath.length) {
-      this.addToThisStore(key, value);
-    } else {
-      this.addToNestedStore(key, subPath, value);
-    }
+    if (!subPath.length) this.addToThisStore(key, value);
+    else this.addToNestedStore(key, subPath, value);
+
     return value;
   }
 
-  private addToThisStore(key: string, value: StoreValue) {
-    if (!this.allowedToWrite(key)) {
-      throw Error(`write operation not allowed for key: ${key}`);
+  writeEntries(entries: JSONObject): void {
+    for (const [key, val] of Object.entries(entries)) {
+      this.write(key, val);
     }
+  }
+
+  entries(): JSONObject {
+    const entries: JSONObject = {};
+    for (const [key, val] of Object.entries(this)) {
+      if (key !== "defaultPolicy" && this.allowedToRead(key)) {
+        entries[key] = val;
+      }
+    }
+    return entries;
+  }
+
+  private getPermission(key: string): Permission {
+    const permissions = Reflect.getMetadata(PERMISSION_KEY, this) || {};
+    return permissions[key] || this.defaultPolicy;
+  }
+
+  private readThisStore(key: string): StoreResult {
+    if (!this.allowedToRead(key))
+      throw Error(`read operation not allowed for key ${key}`);
+
+    const value = this.getAttribute(key);
+
+    if (typeof value === "function") return value();
+    return value as StoreResult;
+  }
+
+  private readNestedStore(subPath: string, key: string): StoreResult {
+    const value = this[key as keyof this];
+    const subStore: Store = typeof value === "function" ? value() : value;
+    return subStore.read(subPath);
+  }
+
+  private addToThisStore(key: string, value: StoreValue) {
+    if (!this.allowedToWrite(key))
+      throw Error(`write operation not allowed for key: ${key}`);
+
     if (typeof value === "object") {
       const subStore = new Store();
       for (const [key, val] of Object.entries(value as JSONObject)) {
@@ -146,21 +147,5 @@ export class Store implements IStore {
 
   private getAttribute(key: string): StoreValue {
     return this[key as keyof this] as StoreValue;
-  }
-
-  writeEntries(entries: JSONObject): void {
-    for (const [key, val] of Object.entries(entries)) {
-      this.write(key, val);
-    }
-  }
-
-  entries(): JSONObject {
-    const response: JSONObject = {};
-    for (const [key, val] of Object.entries(this)) {
-      if (key !== "defaultPolicy" && this.allowedToRead(key)) {
-        response[key] = val;
-      }
-    }
-    return response;
   }
 }
