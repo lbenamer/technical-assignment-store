@@ -102,7 +102,7 @@ export class Store implements IStore {
     if (!this.allowedToWrite(key))
       throw Error(`write operation not allowed for key: ${key}`);
 
-    if (typeof value === "object") {
+    if (typeof value === "object" && !Array.isArray(value) && value !== null) {
       const subStore = new Store();
       for (const [key, val] of Object.entries(value as JSONObject)) {
         subStore.write(key, val);
